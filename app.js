@@ -1,10 +1,9 @@
 // 할 일 대시보드 — 브라우저가 GitHub API로 두 레포를 직접 읽고, 버튼을 누르면 그 줄을 바로 커밋한다.
-import { isTarget, parseFile, editLine } from "./parse.js";
+import { isTarget, parseFile, editLine, editStatus, STATUSES } from "./parse.js";
 import { GitHub, GitHubError, clearCache } from "./github.js";
 
 const CONFIG_KEY = "dash.config.v1";
 const LABELS = { company: "회사", personal: "개인" };
-const STATUSES = ["진행", "대기", "보류", "종료"];
 const WEEK_DAYS = 7;
 const STALE_DAYS = 30; // 이 기간 넘게 수정이 없으면 회색 타일
 
@@ -109,11 +108,23 @@ function replaceFile(repoKey, file, text) {
 
 // ── 반영 (커밋) ────────────────────────────────────
 let queue = Promise.resolve();
-/** 한 파일의 한 줄을 before → after 로 바꿔 커밋. 같은 파일 충돌을 피하려고 하나씩 처리한다 */
-function commitLine(repoKey, file, lineNo, before, after, message) {
+/** 파일 최신본을 읽어 transform(text) 결과로 커밋. 같은 파일 충돌을 피하려고 하나씩 처리한다 */
+function commitFile(repoKey, file, transform, message) {
   const job = queue.then(async () => {
     const repo = REPOS[repoKey];
     const { text, sha } = await gh.readFile(repo, file);
+    const { next, result } = transform(text);
+    await gh.writeFile(repo, file, next, sha, message);
+    replaceFile(repoKey, file, next);
+    return result;
+  });
+  queue = job.catch(() => {});
+  return job;
+}
+
+/** 한 줄을 before → after 로 바꿔 커밋. 그 줄이 GitHub 최신본에 그대로 있을 때만 */
+function commitLine(repoKey, file, lineNo, before, after, message) {
+  return commitFile(repoKey, file, text => {
     const lines = text.split("\n");
     const bare = l => l.replace(/\r$/, "");
     let idx = lineNo - 1;
@@ -124,13 +135,17 @@ function commitLine(repoKey, file, lineNo, before, after, message) {
     }
     const cr = lines[idx].endsWith("\r") ? "\r" : "";
     lines[idx] = after + cr;
-    const next = lines.join("\n");
-    await gh.writeFile(repo, file, next, sha, message);
-    replaceFile(repoKey, file, next);
-    return idx + 1;
-  });
-  queue = job.catch(() => {});
-  return job;
+    return { next: lines.join("\n"), result: idx + 1 };
+  }, message);
+}
+
+/** areas/ 프론트매터 status 를 before → after 로 바꿔 커밋 */
+function commitStatus(repoKey, file, before, after, message) {
+  return commitFile(repoKey, file, text => {
+    const next = editStatus(text, before, after);
+    if (next === null) throw new Error("상태가 GitHub에서 바뀌었어요. 새로고침 후 다시 해 주세요.");
+    return { next, result: null };
+  }, message);
 }
 
 async function applyChange(t, kind) {
@@ -140,7 +155,7 @@ async function applyChange(t, kind) {
   pending.add(t.id); render();
   try {
     const line = await commitLine(t.repo, t.file, t.line, t.raw, after, `대시보드: ${label} — ${t.file}:${t.line}`);
-    lastUndo = { repo: t.repo, file: t.file, line, before: t.raw, after, label };
+    lastUndo = { kind: "line", repo: t.repo, file: t.file, line, before: t.raw, after, label };
     toast(`${label} 반영했어요`, true);
     return true;
   } catch (e) {
@@ -156,12 +171,36 @@ async function undoLast() {
   if (!u) return;
   lastUndo = null; hideToast();
   try {
-    await commitLine(u.repo, u.file, u.line, u.after, u.before, `대시보드: ${u.label} 되돌림 — ${u.file}:${u.line}`);
+    if (u.kind === "status") await commitStatus(u.repo, u.file, u.after, u.before, `대시보드: 상태 되돌림 ${u.after} → ${u.before} — ${u.file}`);
+    else await commitLine(u.repo, u.file, u.line, u.after, u.before, `대시보드: ${u.label} 되돌림 — ${u.file}:${u.line}`);
     toast("되돌렸어요");
   } catch (e) {
     toast(`되돌리기 실패: ${e.message}`, false, true);
   }
   render();
+}
+
+let statusPending = false;
+async function changeStatus(areaKey, next) {
+  const a = DATA.areas.find(x => `${x.repo}:${x.file}` === areaKey);
+  if (!a || a.status === next || statusPending) return;
+  const s = areaStats(a);
+  if (next === "종료" && (s.open.length || a.unsorted)) {
+    const left = [s.open.length ? `열린 할 일 ${s.open.length}줄` : "", a.unsorted ? `미분류 ${a.unsorted}개` : ""].filter(Boolean).join(", ");
+    if (!confirm(`${left}이 남아 있어요. 그래도 「종료」로 바꿀까요?`)) return;
+  }
+  const before = a.status;
+  statusPending = true; renderSheet();
+  try {
+    await commitStatus(a.repo, a.file, before, next, `대시보드: 상태 ${before || "없음"} → ${next} — ${a.file}`);
+    lastUndo = before ? { kind: "status", repo: a.repo, file: a.file, before, after: next } : null;
+    toast(`「${next}」로 바꿨어요`, !!before);
+  } catch (e) {
+    console.error(e);
+    toast(e instanceof GitHubError ? `반영 실패: ${e.message}` : e.message, false, true);
+  } finally {
+    statusPending = false; render();
+  }
 }
 
 // ── 표시 도우미 ─────────────────────────────────────
@@ -313,11 +352,13 @@ function areaStats(a) {
   else if (late) { health = "red"; signal = `지연 ${late}`; }
   else if (nextDue && dayDiff(nextDue, TODAY) <= WEEK_DAYS) { health = "amber"; signal = `기한 D-${dayDiff(nextDue, TODAY)}`; }
   else if (reviewDue) { health = "amber"; signal = "다시 볼 날"; }
+  else if (!open.length && !a.unsorted) { health = "empty"; signal = "할 일 없음 · 종료할까요?"; }
+  else if (!open.length) { health = "empty"; signal = `할 일 줄 없음 · 미분류 ${a.unsorted}`; }
   else if (idle !== null && idle > STALE_DAYS) { health = "gray"; signal = `${idle}일째 그대로`; }
   else { health = "green"; signal = "정상"; }
   return { open, late, check, nextDue, health, signal };
 }
-const HEALTH_ORDER = { red: 0, amber: 1, green: 2, gray: 3, closed: 4 };
+const HEALTH_ORDER = { red: 0, amber: 1, empty: 2, green: 3, gray: 4, closed: 5 };
 function tile(a) {
   const s = a.s;
   return `<button class="tile ${a.repo} h-${s.health}" data-area="${esc(a.repo + ":" + a.file)}">
@@ -331,7 +372,7 @@ function renderBoard() {
     || (x.s.nextDue || "9999").localeCompare(y.s.nextDue || "9999") || y.s.open.length - x.s.open.length;
   let html = `<div class="legend">
     <span><i class="l-red"></i>지연</span><span><i class="l-amber"></i>7일 내 기한·다시 볼 날</span>
-    <span><i class="l-green"></i>정상</span><span><i class="l-gray"></i>${STALE_DAYS}일+ 수정 없음</span></div>`;
+    <span><i class="l-empty"></i>할 일 없음</span><span><i class="l-green"></i>정상</span><span><i class="l-gray"></i>${STALE_DAYS}일+ 수정 없음</span></div>`;
   for (const st of [...STATUSES, null]) {
     const items = areas.filter(a => st ? a.status === st : !STATUSES.includes(a.status)).sort(sortKey);
     if (st === null && !items.length) continue;
@@ -369,6 +410,10 @@ function renderSheet() {
       <span>다음 기한 <b>${s.nextDue ? s.nextDue.slice(5) + " (D-" + dayDiff(s.nextDue, TODAY) + ")" : "—"}</b></span>
       <span>수정 <b>${a.modified ? a.modified.slice(5) : "—"}</b></span>
       ${a.review ? `<span>다시 볼 날 <b>${esc(a.review.slice(5))}</b></span>` : ""}
+    </div>
+    <div class="status-pick" role="group" aria-label="상태 바꾸기">
+      ${STATUSES.map(st => `<button class="btn" data-act="status" data-status="${st}"
+        aria-pressed="${a.status === st}" ${a.status === st || statusPending ? "disabled" : ""}>${st}</button>`).join("")}
     </div>
     ${list(s.open.sort(byDue), { hidePath: true })}`;
   $("sheet-wrap").hidden = false;
@@ -459,6 +504,7 @@ document.addEventListener("click", e => {
   const act = e.target.closest("[data-act]")?.dataset.act;
   if (act) {
     if (act === "close-sheet") closeSheet();
+    else if (act === "status") changeStatus(sheetArea, e.target.closest("[data-act]").dataset.status);
     else if (act === "triage-start") startTriage();
     else if (act === "save-settings") saveSettings();
     else if (act === "cancel-settings") showTab("today");

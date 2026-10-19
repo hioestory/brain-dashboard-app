@@ -182,3 +182,9 @@ li.todo.pending .text::after { content: " · 반영 중…"; color: var(--muted)
 .settings .warn { background: var(--amber-soft); color: var(--amber); border-radius: 8px; padding: 10px 12px; font-size: 13px; }
 .toast { bottom: calc(20px + env(safe-area-inset-bottom)); max-width: calc(100% - 32px); }
 body { padding-bottom: calc(40px + env(safe-area-inset-bottom)); }
+.status-pick { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 0 0 12px; }
+.status-pick button { padding: 8px 4px; }
+.status-pick button[aria-pressed="true"] { background: var(--accent); color: var(--bg); border-color: var(--accent); opacity: 1; font-weight: 700; }
+.tile.h-empty { background: var(--card); border-style: dashed; border-top-style: solid; }
+.tile.h-empty .sig { color: var(--amber); }
+.legend i.l-empty { background: var(--card); border: 1px dashed var(--muted); }

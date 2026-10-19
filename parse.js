@@ -103,6 +103,35 @@ export function parseFile(text, rel, repoKey) {
   return { meta, title: title || stem, todos, unsorted };
 }
 
+export const STATUSES = ["진행", "대기", "보류", "종료"];
+
+/**
+ * areas/ 파일의 프론트매터 status 바꾸기. 지금 값이 expected 와 다르면(그사이 바뀜) null.
+ * 주석(`# 진행 | 대기 …`)과 다른 줄은 그대로 둔다. 프론트매터가 없으면 맨 위에 만든다
+ */
+export function editStatus(text, expected, next) {
+  if (!STATUSES.includes(next)) return null;
+  const nl = text.includes("\r\n") ? "\r\n" : "\n";
+  const lines = text.split(nl);
+  if (lines[0]?.trim() === "---") {
+    const end = lines.findIndex((l, i) => i > 0 && l.trim() === "---");
+    if (end > 0) {
+      const i = lines.findIndex((l, j) => j > 0 && j < end && /^status\s*:/.test(l));
+      if (i < 0) {
+        if (expected) return null;
+        lines.splice(1, 0, `status: ${next}`);
+        return lines.join(nl);
+      }
+      const m = lines[i].match(/^(status\s*:\s*)([^#\s]*)(.*)$/);
+      if ((m[2] || null) !== (expected || null)) return null;
+      lines[i] = m[1] + next + m[3];
+      return lines.join(nl);
+    }
+  }
+  if (expected) return null;
+  return `---${nl}status: ${next}${nl}---${nl}` + text;
+}
+
 /** 할 일 줄 고치기. kind: "done" | "keep"(#확인 떼기). 고칠 수 없으면 null */
 export function editLine(raw, kind, today) {
   if (kind === "done") {
