@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="referrer" content="no-referrer">
+<!-- 토큰을 기기에 두므로 외부 스크립트·연결을 모두 막는다. GitHub API 와 같은 출처만 허용 -->
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://api.github.com; base-uri 'none'; form-action 'none'">
+<title>할 일 대시보드</title>
+<link rel="stylesheet" href="app.css">
+<script type="module" src="app.js"></script>
+</head>
+<body>
+<header>
+  <div class="top">
+    <h1>할 일 대시보드</h1>
+    <div class="top-actions">
+      <button class="icon-btn" id="reload" title="GitHub에서 다시 읽기">새로고침</button>
+      <button class="icon-btn" id="open-settings" title="설정">설정</button>
+    </div>
+  </div>
+  <div class="status-line" id="status"></div>
+  <div class="filters" role="group" aria-label="구분">
+    <button class="chip" data-repo="all" aria-pressed="true">전체</button>
+    <button class="chip company" data-repo="company" aria-pressed="false">회사</button>
+    <button class="chip personal" data-repo="personal" aria-pressed="false">개인</button>
+  </div>
+  <nav role="tablist">
+    <button role="tab" data-tab="today" aria-selected="true">오늘<span class="n" id="n-today"></span></button>
+    <button role="tab" data-tab="board" aria-selected="false">현황판<span class="n" id="n-board"></span></button>
+  </nav>
+</header>
+<main>
+  <section class="tab" id="tab-today"></section>
+  <section class="tab" id="tab-board" hidden></section>
+  <section class="tab" id="tab-settings" hidden></section>
+</main>
+<div class="sheet-wrap" id="sheet-wrap" hidden><div class="sheet" id="sheet" role="dialog" aria-modal="true"></div></div>
+<div class="toast" id="toast" role="status"><span id="toast-msg"></span><button id="toast-undo" hidden>되돌리기</button></div>
+</body>
+</html>
