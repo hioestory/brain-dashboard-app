@@ -1,5 +1,5 @@
 // 할 일 대시보드 — 브라우저가 GitHub API로 두 레포를 직접 읽고, 버튼을 누르면 그 줄을 바로 커밋한다.
-import { isTarget, parseFile, editLine, editStatus, STATUSES } from "./parse.js";
+import { isTarget, parseFile, editLine, editStatus, editDue, STATUSES } from "./parse.js";
 import { GitHub, GitHubError, clearCache } from "./github.js";
 
 const CONFIG_KEY = "dash.config.v1";
@@ -90,7 +90,7 @@ async function loadAll() {
 }
 function areaFrom(repoKey, file, parsed, modified) {
   return { repo: repoKey, file, title: parsed.title, status: parsed.meta.status || null,
-           review: parsed.meta.review || null, modified, unsorted: parsed.unsorted };
+           review: parsed.meta.review || null, due: parsed.meta.due || null, modified, unsorted: parsed.unsorted };
 }
 function reindex() {
   DATA.todos.forEach(t => { t.id = `${t.repo}:${t.file}:${t.line}`; });
@@ -139,11 +139,13 @@ function commitLine(repoKey, file, lineNo, before, after, message) {
   }, message);
 }
 
-/** areas/ 프론트매터 status 를 before → after 로 바꿔 커밋 */
-function commitStatus(repoKey, file, before, after, message) {
+/** areas/ 프론트매터(status·due)를 before → after 로 바꿔 커밋. GitHub 최신본 값이 before 일 때만 */
+const META_EDIT = { status: editStatus, due: editDue };
+const META_LABEL = { status: "상태", due: "마감" };
+function commitMeta(repoKey, file, key, before, after, message) {
   return commitFile(repoKey, file, text => {
-    const next = editStatus(text, before, after);
-    if (next === null) throw new Error("상태가 GitHub에서 바뀌었어요. 새로고침 후 다시 해 주세요.");
+    const next = META_EDIT[key](text, before, after);
+    if (next === null) throw new Error(`${META_LABEL[key]}이 GitHub에서 바뀌었어요. 새로고침 후 다시 해 주세요.`);
     return { next, result: null };
   }, message);
 }
@@ -171,7 +173,8 @@ async function undoLast() {
   if (!u) return;
   lastUndo = null; hideToast();
   try {
-    if (u.kind === "status") await commitStatus(u.repo, u.file, u.after, u.before, `대시보드: 상태 되돌림 ${u.after} → ${u.before} — ${u.file}`);
+    if (u.kind === "meta") await commitMeta(u.repo, u.file, u.key, u.after, u.before,
+      `대시보드: ${META_LABEL[u.key]} 되돌림 ${u.after || "없음"} → ${u.before || "없음"} — ${u.file}`);
     else await commitLine(u.repo, u.file, u.line, u.after, u.before, `대시보드: ${u.label} 되돌림 — ${u.file}:${u.line}`);
     toast("되돌렸어요");
   } catch (e) {
@@ -180,27 +183,35 @@ async function undoLast() {
   render();
 }
 
-let statusPending = false;
-async function changeStatus(areaKey, next) {
+let metaPending = false;
+/** 프로젝트 프론트매터 한 값 바꾸기 (status·due) */
+async function changeMeta(areaKey, key, next) {
   const a = DATA.areas.find(x => `${x.repo}:${x.file}` === areaKey);
-  if (!a || a.status === next || statusPending) return;
+  if (!a || a[key] === next || metaPending) return;
+  const before = a[key];
+  if (key === "status" && !before) { toast("상태가 없는 파일이에요. 레포 세션에서 먼저 넣어 주세요", false, true); return; }
+  metaPending = true; renderSheet();
+  try {
+    await commitMeta(a.repo, a.file, key, before, next,
+      `대시보드: ${META_LABEL[key]} ${before || "없음"} → ${next || "없음"} — ${a.file}`);
+    lastUndo = { kind: "meta", key, repo: a.repo, file: a.file, before, after: next };
+    toast(key === "status" ? `「${next}」로 바꿨어요` : next ? `마감을 ${next.slice(5)}로 정했어요` : "마감을 지웠어요", true);
+  } catch (e) {
+    console.error(e);
+    toast(e instanceof GitHubError ? `반영 실패: ${e.message}` : e.message, false, true);
+  } finally {
+    metaPending = false; render();
+  }
+}
+function changeStatus(areaKey, next) {
+  const a = DATA.areas.find(x => `${x.repo}:${x.file}` === areaKey);
+  if (!a) return;
   const s = areaStats(a);
   if (next === "종료" && (s.open.length || a.unsorted)) {
     const left = [s.open.length ? `열린 할 일 ${s.open.length}줄` : "", a.unsorted ? `미분류 ${a.unsorted}개` : ""].filter(Boolean).join(", ");
     if (!confirm(`${left}이 남아 있어요. 그래도 「종료」로 바꿀까요?`)) return;
   }
-  const before = a.status;
-  statusPending = true; renderSheet();
-  try {
-    await commitStatus(a.repo, a.file, before, next, `대시보드: 상태 ${before || "없음"} → ${next} — ${a.file}`);
-    lastUndo = before ? { kind: "status", repo: a.repo, file: a.file, before, after: next } : null;
-    toast(`「${next}」로 바꿨어요`, !!before);
-  } catch (e) {
-    console.error(e);
-    toast(e instanceof GitHubError ? `반영 실패: ${e.message}` : e.message, false, true);
-  } finally {
-    statusPending = false; render();
-  }
+  changeMeta(areaKey, "status", next);
 }
 
 // ── 표시 도우미 ─────────────────────────────────────
@@ -263,8 +274,11 @@ function grouped(items) {
 const block = (title, items, cls = "") => `<h2 class="${cls}">${title} <span class="count">${items.length}</span></h2>${grouped(items)}`;
 
 // ── 오늘 ───────────────────────────────────────────
+// 보류·종료 프로젝트의 태스크는 오늘 탭에서 뺀다. #확인 줄은 정리하도록 남긴다
+const INACTIVE = new Set(["보류", "종료"]);
 function todayBuckets() {
-  const open = DATA.todos.filter(t => isOpen(t) && visible(t));
+  const statusOf = new Map(DATA.areas.map(a => [`${a.repo}:${a.file}`, a.status]));
+  const open = DATA.todos.filter(t => isOpen(t) && visible(t) && (t.check || !INACTIVE.has(statusOf.get(fileKey(t)))));
   return {
     late: open.filter(t => isLate(t) && !t.check).sort(byDue),
     week: open.filter(t => t.due && t.due >= TODAY && t.due <= weekLimit).sort(byDue),
@@ -347,16 +361,20 @@ function areaStats(a) {
   const check = open.filter(t => t.check).length;
   const idle = a.modified ? dayDiff(TODAY, a.modified) : null;
   const reviewDue = !!(a.review && a.review <= TODAY);
+  const dueIn = a.due ? dayDiff(a.due, TODAY) : null;          // 프로젝트 마감까지 남은 날
+  const afterDue = a.due ? open.filter(t => t.due && t.due > a.due).length : 0; // 마감 뒤로 잡힌 태스크
   let health, signal;
   if (a.status === "종료") { health = "closed"; signal = "종료"; }
+  else if (dueIn !== null && dueIn < 0) { health = "red"; signal = `마감 지남 D+${-dueIn}`; }
   else if (late) { health = "red"; signal = `지연 ${late}`; }
+  else if (dueIn !== null && dueIn <= WEEK_DAYS) { health = "amber"; signal = dueIn === 0 ? "오늘 마감" : `마감 D-${dueIn}`; }
   else if (nextDue && dayDiff(nextDue, TODAY) <= WEEK_DAYS) { health = "amber"; signal = `기한 D-${dayDiff(nextDue, TODAY)}`; }
   else if (reviewDue) { health = "amber"; signal = "다시 볼 날"; }
   else if (!open.length && !a.unsorted) { health = "empty"; signal = "할 일 없음 · 종료할까요?"; }
   else if (!open.length) { health = "empty"; signal = `할 일 줄 없음 · 미분류 ${a.unsorted}`; }
   else if (idle !== null && idle > STALE_DAYS) { health = "gray"; signal = `${idle}일째 그대로`; }
   else { health = "green"; signal = "정상"; }
-  return { open, late, check, nextDue, health, signal };
+  return { open, late, check, nextDue, dueIn, afterDue, health, signal };
 }
 const HEALTH_ORDER = { red: 0, amber: 1, empty: 2, green: 3, gray: 4, closed: 5 };
 function tile(a) {
@@ -364,14 +382,15 @@ function tile(a) {
   return `<button class="tile ${a.repo} h-${s.health}" data-area="${esc(a.repo + ":" + a.file)}">
     <span class="tt">${md(a.title)}</span>
     <span class="sig">${s.signal}</span>
-    <span class="ts">열린 ${s.open.length}${s.check ? ` · #확인 ${s.check}` : ""}${a.unsorted ? ` · 미분류 ${a.unsorted}` : ""}</span></button>`;
+    <span class="ts">${a.due && a.status !== "종료" ? `마감 ${a.due.slice(5)} · ` : ""}열린 ${s.open.length}${s.check ? ` · #확인 ${s.check}` : ""}${a.unsorted ? ` · 미분류 ${a.unsorted}` : ""}</span></button>`;
 }
+const soonest = a => [a.due, a.s.nextDue].filter(Boolean).sort()[0] || "9999";
 function renderBoard() {
   const areas = DATA.areas.filter(visible).map(a => ({ ...a, s: areaStats(a) }));
   const sortKey = (x, y) => HEALTH_ORDER[x.s.health] - HEALTH_ORDER[y.s.health] || y.s.late - x.s.late
-    || (x.s.nextDue || "9999").localeCompare(y.s.nextDue || "9999") || y.s.open.length - x.s.open.length;
+    || soonest(x).localeCompare(soonest(y)) || y.s.open.length - x.s.open.length;
   let html = `<div class="legend">
-    <span><i class="l-red"></i>지연</span><span><i class="l-amber"></i>7일 내 기한·다시 볼 날</span>
+    <span><i class="l-red"></i>지연·마감 지남</span><span><i class="l-amber"></i>7일 내 기한·마감·다시 볼 날</span>
     <span><i class="l-empty"></i>할 일 없음</span><span><i class="l-green"></i>정상</span><span><i class="l-gray"></i>${STALE_DAYS}일+ 수정 없음</span></div>`;
   for (const st of [...STATUSES, null]) {
     const items = areas.filter(a => st ? a.status === st : !STATUSES.includes(a.status)).sort(sortKey);
@@ -403,6 +422,7 @@ function renderSheet() {
       <button class="close" data-act="close-sheet" aria-label="닫기">×</button></div>
     <div class="stats">
       <span>상태 <b>${esc(a.status || "미지정")}</b></span>
+      <span>마감 <b>${a.due ? esc(a.due.slice(5)) + (s.dueIn >= 0 ? ` (D-${s.dueIn})` : ` (D+${-s.dueIn})`) : "—"}</b></span>
       <span>열린 <b>${s.open.length}</b></span>
       <span>지연 <b>${s.late}</b></span>
       <span>#확인 <b>${s.check}</b></span>
@@ -413,8 +433,15 @@ function renderSheet() {
     </div>
     <div class="status-pick" role="group" aria-label="상태 바꾸기">
       ${STATUSES.map(st => `<button class="btn" data-act="status" data-status="${st}"
-        aria-pressed="${a.status === st}" ${a.status === st || statusPending ? "disabled" : ""}>${st}</button>`).join("")}
+        aria-pressed="${a.status === st}" ${a.status === st || metaPending ? "disabled" : ""}>${st}</button>`).join("")}
     </div>
+    <div class="due-pick">
+      <label for="due-input">프로젝트 마감</label>
+      <input type="date" id="due-input" value="${esc(a.due || "")}" ${metaPending ? "disabled" : ""}>
+      <button class="btn" data-act="due-save" ${metaPending ? "disabled" : ""}>저장</button>
+      ${a.due ? `<button class="btn" data-act="due-clear" ${metaPending ? "disabled" : ""}>지우기</button>` : ""}
+    </div>
+    ${s.afterDue ? `<div class="warn-line">⚠️ 프로젝트 마감(${esc(a.due.slice(5))})보다 늦은 태스크가 ${s.afterDue}개 있어요</div>` : ""}
     ${list(s.open.sort(byDue), { hidePath: true })}`;
   $("sheet-wrap").hidden = false;
   document.body.classList.add("locked");
@@ -505,6 +532,12 @@ document.addEventListener("click", e => {
   if (act) {
     if (act === "close-sheet") closeSheet();
     else if (act === "status") changeStatus(sheetArea, e.target.closest("[data-act]").dataset.status);
+    else if (act === "due-save") {
+      const v = $("due-input").value;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) { toast("날짜를 골라 주세요", false, true); return; }
+      changeMeta(sheetArea, "due", v);
+    }
+    else if (act === "due-clear") changeMeta(sheetArea, "due", null);
     else if (act === "triage-start") startTriage();
     else if (act === "save-settings") saveSettings();
     else if (act === "cancel-settings") showTab("today");

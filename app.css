@@ -188,3 +188,8 @@ body { padding-bottom: calc(40px + env(safe-area-inset-bottom)); }
 .tile.h-empty { background: var(--card); border-style: dashed; border-top-style: solid; }
 .tile.h-empty .sig { color: var(--amber); }
 .legend i.l-empty { background: var(--card); border: 1px dashed var(--muted); }
+.due-pick { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 0 0 10px; font-size: 13px; color: var(--muted); }
+.due-pick input { font: inherit; font-size: 14px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--card); color: var(--text); }
+.due-pick .btn { padding: 6px 10px; font-size: 13px; }
+.warn-line { background: var(--amber-soft); color: var(--amber); border-radius: 8px; padding: 8px 10px; font-size: 13px; margin: 0 0 10px; }

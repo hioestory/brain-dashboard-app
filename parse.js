@@ -3,8 +3,8 @@
 
 export const EXCLUDE_DIRS = new Set([".git", ".claude", "log", "english", "node_modules"]);
 export const EXCLUDE_FILES = new Set(["STATUS.md"]);
-// 기록용 보관 폴더(레포 최상위) — 할 일을 수집하지 않는다
-export const ARCHIVE_DIRS = { personal: new Set(["ideas", "learning", "parenting"]) };
+// 프로젝트 = areas/ 파일, 태스크 = 그 안의 할 일 줄 (2026-10-19 결정). 다른 폴더는 기록이라 읽지 않는다
+export const PROJECT_DIR = "areas";
 const TODO_SECTIONS = ["다음 액션", "챙길 것"];
 const UNSORTED_SECTION = "다음 액션";
 
@@ -24,9 +24,8 @@ export function isTarget(repoKey, rel) {
   const parts = rel.split("/");
   const name = parts[parts.length - 1];
   if (EXCLUDE_FILES.has(name)) return false;
+  if (parts.length < 2 || parts[0] !== PROJECT_DIR) return false;
   if (parts.slice(0, -1).some(p => EXCLUDE_DIRS.has(p))) return false;
-  const archive = ARCHIVE_DIRS[repoKey];
-  if (archive && parts.length > 1 && archive.has(parts[0])) return false;
   return true;
 }
 
@@ -105,31 +104,49 @@ export function parseFile(text, rel, repoKey) {
 
 export const STATUSES = ["진행", "대기", "보류", "종료"];
 
+const RE_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
 /**
- * areas/ 파일의 프론트매터 status 바꾸기. 지금 값이 expected 와 다르면(그사이 바뀜) null.
- * 주석(`# 진행 | 대기 …`)과 다른 줄은 그대로 둔다. 프론트매터가 없으면 맨 위에 만든다
+ * areas/ 파일 프론트매터의 key 값을 expected → next 로 바꾼다. next 가 null 이면 그 줄을 지운다.
+ * 지금 값이 expected 와 다르면(그사이 바뀜) null. 주석(`# …`)과 다른 줄은 그대로 둔다.
+ * 프론트매터가 없으면 맨 위에 만든다
  */
-export function editStatus(text, expected, next) {
-  if (!STATUSES.includes(next)) return null;
+export function editFrontmatter(text, key, expected, next) {
   const nl = text.includes("\r\n") ? "\r\n" : "\n";
   const lines = text.split(nl);
+  const keyRe = new RegExp(`^(${key}\\s*:\\s*)([^#\\s]*)(.*)$`);
+  const norm = v => v || null;
   if (lines[0]?.trim() === "---") {
     const end = lines.findIndex((l, i) => i > 0 && l.trim() === "---");
     if (end > 0) {
-      const i = lines.findIndex((l, j) => j > 0 && j < end && /^status\s*:/.test(l));
+      const i = lines.findIndex((l, j) => j > 0 && j < end && keyRe.test(l));
       if (i < 0) {
-        if (expected) return null;
-        lines.splice(1, 0, `status: ${next}`);
+        if (norm(expected) !== null) return null;
+        if (next === null) return text;
+        const st = lines.findIndex((l, j) => j > 0 && j < end && /^status\s*:/.test(l));
+        lines.splice(st > 0 ? st + 1 : 1, 0, `${key}: ${next}`);
         return lines.join(nl);
       }
-      const m = lines[i].match(/^(status\s*:\s*)([^#\s]*)(.*)$/);
-      if ((m[2] || null) !== (expected || null)) return null;
-      lines[i] = m[1] + next + m[3];
+      const m = lines[i].match(keyRe);
+      if (norm(m[2]) !== norm(expected)) return null;
+      if (next === null) lines.splice(i, 1);
+      else lines[i] = m[1] + next + m[3];
       return lines.join(nl);
     }
   }
-  if (expected) return null;
-  return `---${nl}status: ${next}${nl}---${nl}` + text;
+  if (norm(expected) !== null) return null;
+  if (next === null) return text;
+  return `---${nl}${key}: ${next}${nl}---${nl}` + text;
+}
+
+/** 프로젝트 상태 바꾸기 */
+export function editStatus(text, expected, next) {
+  return STATUSES.includes(next) ? editFrontmatter(text, "status", expected, next) : null;
+}
+
+/** 프로젝트 마감일 바꾸기. next 가 null 이면 마감일을 지운다 */
+export function editDue(text, expected, next) {
+  return next === null || RE_DATE.test(next) ? editFrontmatter(text, "due", expected, next) : null;
 }
 
 /** 할 일 줄 고치기. kind: "done" | "keep"(#확인 떼기). 고칠 수 없으면 null */
