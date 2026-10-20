@@ -2,6 +2,7 @@
 import { isTarget, parseFile, editLine, editStatus, editDue, STATUSES } from "./parse.js";
 import { GitHub, GitHubError, clearCache } from "./github.js";
 import { SOON_DAYS, COLUMNS, todayTargets, columnOf } from "./today.js";
+import { search } from "./search.js";
 
 const CONFIG_KEY = "dash.config.v1";
 const LABELS = { company: "회사", personal: "개인" };
@@ -80,7 +81,7 @@ async function loadAll() {
     reindex();
     const now = new Date();
     setStatus(`읽음 ${pad(now.getHours())}:${pad(now.getMinutes())} · 할 일 ${todos.filter(t => !t.done).length}줄 열림`);
-    showTab(currentTab());
+    if (query) render(); else showTab(currentTab()); // 검색 중이면 결과를 그대로 둔 채 새 데이터로 다시 그린다
   } catch (e) {
     console.error(e);
     const msg = e instanceof GitHubError && e.status === 401 ? "토큰이 맞지 않거나 만료됐어요. 설정에서 다시 넣어 주세요."
@@ -540,6 +541,7 @@ function currentTab() {
   return document.querySelector("nav button[aria-selected='true']")?.dataset.tab || "today";
 }
 function showTab(tab) {
+  if (query) { query = ""; $("search").value = ""; }
   document.querySelectorAll("nav button").forEach(b => b.setAttribute("aria-selected", b.dataset.tab === tab));
   document.querySelectorAll("section.tab").forEach(s => s.hidden = s.id !== "tab-" + tab);
   document.body.classList.toggle("on-today", tab === "today"); // PC에서 칸마다 따로 스크롤
@@ -549,8 +551,67 @@ function showTab(tab) {
 function render() {
   $("n-today").textContent = renderToday();
   $("n-board").textContent = renderBoard();
+  renderSearch();
   renderSheet();
 }
+
+// ── 검색 ───────────────────────────────────────────
+let query = "";
+/** 검색어가 있으면 검색 결과만 보이고, 지우면 보던 탭으로 돌아간다 */
+function renderSearch() {
+  const el = $("tab-search");
+  const on = !!query.trim();
+  const tab = currentTab();
+  if (!on) {
+    if (!el.hidden) {
+      el.hidden = true;
+      document.querySelectorAll("section.tab").forEach(x => { if (x !== el) x.hidden = x.id !== "tab-" + tab; });
+      document.body.classList.toggle("on-today", tab === "today");
+    }
+    return;
+  }
+  document.querySelectorAll("section.tab").forEach(x => x.hidden = x !== el);
+  document.body.classList.remove("on-today");
+  const r = search(query, {
+    areas: DATA.areas.filter(visible), todos: DATA.todos.filter(visible), titleOf,
+  });
+  const projects = r.projects.map(a => ({ ...a, s: areaStats(a) }));
+  el.innerHTML = `<div class="search-head">「${esc(query.trim())}」 — 프로젝트 ${projects.length} · 태스크 ${r.open.length + r.done.length}</div>
+    <h2>프로젝트 <span class="count">${projects.length}</span></h2>
+    ${projects.length ? `<div class="tiles">${projects.map(tile).join("")}</div>` : `<div class="empty">없음</div>`}
+    <h2>열린 태스크 <span class="count">${r.open.length}</span></h2>
+    ${list(r.open.sort(byDue))}
+    ${r.done.length ? `<details class="fold"><summary>완료한 태스크 <span class="count">${r.done.length}</span></summary>${list(r.done.sort(byFile))}</details>` : ""}`;
+}
+let searchTimer = null;
+$("search").addEventListener("input", e => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => { query = e.target.value; triage = null; render(); window.scrollTo(0, 0); }, 120);
+});
+$("search").addEventListener("keydown", e => {
+  if (e.key === "Escape") { e.target.value = ""; query = ""; render(); e.target.blur(); }
+});
+
+// ── 화면 모드 (시스템 / 라이트 / 다크) ──────────────
+const THEME_KEY = "dash.theme";
+const THEMES = ["system", "light", "dark"];
+const THEME_LABEL = { system: "◐ 시스템", light: "☀ 라이트", dark: "☾ 다크" };
+function currentTheme() {
+  const t = document.documentElement.dataset.theme;
+  return t === "light" || t === "dark" ? t : "system";
+}
+function setTheme(t) {
+  if (t === "system") delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = t;
+  try { t === "system" ? localStorage.removeItem(THEME_KEY) : localStorage.setItem(THEME_KEY, t); } catch (e) {}
+  $("theme").textContent = THEME_LABEL[t];
+}
+$("theme").textContent = THEME_LABEL[currentTheme()];
+$("theme").addEventListener("click", () => {
+  const next = THEMES[(THEMES.indexOf(currentTheme()) + 1) % THEMES.length];
+  setTheme(next);
+  toast(`화면 모드: ${THEME_LABEL[next].slice(2)}`);
+});
 
 let toastTimer = null;
 function toast(msg, withUndo = false, isError = false) {
@@ -598,6 +659,7 @@ document.addEventListener("click", e => {
 });
 document.addEventListener("keydown", e => {
   if (e.key === "Escape" && sheetArea) { closeSheet(); return; }
+  if (e.key === "/" && !e.target.matches("input, textarea") && !sheetArea) { e.preventDefault(); $("search").focus(); return; }
   if (!triage || e.metaKey || e.ctrlKey || e.altKey || e.target.matches("input, textarea")) return;
   const map = { x: "done", X: "done", k: "keep", K: "keep", ArrowRight: "skip", ArrowLeft: "prev" };
   if (map[e.key]) { e.preventDefault(); triageAct(map[e.key]); }

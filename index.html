@@ -9,6 +9,7 @@
 <meta http-equiv="Content-Security-Policy"
       content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://api.github.com; base-uri 'none'; form-action 'none'">
 <title>할 일 대시보드</title>
+<script src="theme.js"></script>
 <link rel="stylesheet" href="app.css">
 <script type="module" src="app.js"></script>
 </head>
@@ -17,6 +18,7 @@
   <div class="top">
     <h1>할 일 대시보드</h1>
     <div class="top-actions">
+      <button class="icon-btn" id="theme" title="화면 모드 (시스템 → 라이트 → 다크)">◐ 시스템</button>
       <button class="icon-btn" id="reload" title="GitHub에서 다시 읽기">새로고침</button>
       <button class="icon-btn" id="open-settings" title="설정">설정</button>
     </div>
@@ -26,6 +28,8 @@
     <button class="chip" data-repo="all" aria-pressed="true">전체</button>
     <button class="chip company" data-repo="company" aria-pressed="false">회사</button>
     <button class="chip personal" data-repo="personal" aria-pressed="false">개인</button>
+    <input type="search" id="search" class="search" placeholder="태스크·프로젝트 검색" aria-label="태스크·프로젝트 검색"
+           autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search">
   </div>
   <nav role="tablist">
     <button role="tab" data-tab="today" aria-selected="true">오늘<span class="n" id="n-today"></span></button>
@@ -36,6 +40,7 @@
   <section class="tab" id="tab-today"></section>
   <section class="tab" id="tab-board" hidden></section>
   <section class="tab" id="tab-settings" hidden></section>
+  <section class="tab" id="tab-search" hidden></section>
 </main>
 <div class="sheet-wrap" id="sheet-wrap" hidden><div class="sheet" id="sheet" role="dialog" aria-modal="true"></div></div>
 <div class="toast" id="toast" role="status"><span id="toast-msg"></span><button id="toast-undo" hidden>되돌리기</button></div>

@@ -1,18 +1,29 @@
 :root {
+  color-scheme: light;
   --bg: #f6f7f9; --card: #fff; --text: #1d2129; --muted: #6b7280; --line: #e5e7eb;
   --company: #0d9488; --company-soft: #ccfbf1; --personal: #7c3aed; --personal-soft: #ede9fe;
   --red: #dc2626; --red-soft: #fee2e2; --amber: #b45309; --amber-soft: #fef3c7;
   --green: #15803d; --green-soft: #dcfce7; --gray-soft: #eef0f3;
   --accent: #111827;
 }
+/* 화면 모드: 저장값이 없으면 시스템 설정, data-theme="light|dark" 면 그 모드 (theme.js) */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
     --bg: #0f1115; --card: #181b21; --text: #e6e8eb; --muted: #9aa1ac; --line: #2a2f37;
     --company: #2dd4bf; --company-soft: #123b37; --personal: #a78bfa; --personal-soft: #2e2448;
     --red: #f87171; --red-soft: #3b1d1d; --amber: #fbbf24; --amber-soft: #3a2e12;
     --green: #4ade80; --green-soft: #14301d; --gray-soft: #22262d;
     --accent: #e6e8eb;
   }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0f1115; --card: #181b21; --text: #e6e8eb; --muted: #9aa1ac; --line: #2a2f37;
+  --company: #2dd4bf; --company-soft: #123b37; --personal: #a78bfa; --personal-soft: #2e2448;
+  --red: #f87171; --red-soft: #3b1d1d; --amber: #fbbf24; --amber-soft: #3a2e12;
+  --green: #4ade80; --green-soft: #14301d; --gray-soft: #22262d;
+  --accent: #e6e8eb;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; background: var(--bg); color: var(--text);
@@ -250,3 +261,11 @@ details.pgroup > ul.todos { padding: 0 6px 6px; }
   .col > h2 { display: flex; flex: none; margin: 10px 2px 8px; }
   .col-body { flex: 1; min-height: 0; overflow-y: auto; }
 }
+
+/* 검색 */
+.filters { align-items: center; }
+.search { flex: 1; min-width: 0; font: inherit; font-size: 14px; padding: 4px 10px; border: 1px solid var(--line);
+  border-radius: 999px; background: var(--card); color: var(--text); }
+.search::placeholder { color: var(--muted); }
+.search-head { color: var(--muted); font-size: 13px; margin-top: 4px; }
+#tab-search .tiles { margin-bottom: 4px; }
