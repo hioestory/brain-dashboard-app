@@ -1,6 +1,7 @@
 // 할 일 대시보드 — 브라우저가 GitHub API로 두 레포를 직접 읽고, 버튼을 누르면 그 줄을 바로 커밋한다.
 import { isTarget, parseFile, editLine, editStatus, editDue, STATUSES } from "./parse.js";
 import { GitHub, GitHubError, clearCache } from "./github.js";
+import { SOON_DAYS, COLUMNS, todayTargets, columnOf } from "./today.js";
 
 const CONFIG_KEY = "dash.config.v1";
 const LABELS = { company: "회사", personal: "개인" };
@@ -247,7 +248,8 @@ const badges = t => [
 
 function todoLi(t, opts = {}) {
   const path = opts.hidePath ? `<span class="path ${t.repo}">:${t.line}</span>`
-                             : `<span class="path ${t.repo}">${esc(pathOf(t))}:${t.line}</span>`;
+             : opts.proj ? `<span class="proj ${t.repo}" title="${esc(pathOf(t))}:${t.line}">${md(titleOf(t))}</span>`
+                         : `<span class="path ${t.repo}">${esc(pathOf(t))}:${t.line}</span>`;
   const box = t.done ? "" : `<input type="checkbox" data-id="${esc(t.id)}" aria-label="완료로 반영">`;
   return `<li class="todo ${t.repo}${t.done ? " done" : ""}${pending.has(t.id) ? " pending" : ""}" data-id="${esc(t.id)}">
     ${box}<div class="body"><div class="text">${md(t.text)}</div><div class="meta">${badges(t)}${path}</div></div></li>`;
@@ -255,50 +257,91 @@ function todoLi(t, opts = {}) {
 const list = (items, opts) => items.length ? `<ul class="todos">${items.map(t => todoLi(t, opts)).join("")}</ul>`
                                           : `<div class="empty">없음</div>`;
 
-// 건(파일)별로 묶는다. 묶음 순서는 정렬된 목록에서 처음 나온 순서
-function grouped(items) {
-  if (!items.length) return `<div class="empty">없음</div>`;
-  const groups = new Map();
-  for (const t of items) {
-    if (!groups.has(fileKey(t))) groups.set(fileKey(t), []);
-    groups.get(fileKey(t)).push(t);
-  }
-  return `<div class="groups">${[...groups.values()].map(ts => {
-    const t0 = ts[0];
-    return `<div><div class="group-head"><span class="gt ${t0.repo}">${md(titleOf(t0))}</span>
-      <span class="gc">${ts.length}줄</span></div>
-      <div class="meta group-path"><span class="path ${t0.repo}">${esc(pathOf(t0))}</span></div>
-      ${list(ts, { hidePath: true })}</div>`;
-  }).join("")}</div>`;
-}
-const block = (title, items, cls = "") => `<h2 class="${cls}">${title} <span class="count">${items.length}</span></h2>${grouped(items)}`;
+// ── 오늘 (4열 칸반: 기한 지남 / 기한 임박 / 기한 없음 / 정리 필요) ──────
+let todayCol = null;            // 좁은 화면에서 보고 있는 칸
+const openFolds = new Set();    // 「기한 없음」에서 펼친 프로젝트
+const byPriority = (a, b) => Number(b.priority) - Number(a.priority) || byDue(a, b);
+const soonOf = t => dayDiff(t.due, TODAY) <= SOON_DAYS;
 
-// ── 오늘 ───────────────────────────────────────────
-// 보류·종료 프로젝트의 태스크는 오늘 탭에서 뺀다. #확인 줄은 정리하도록 남긴다
-const INACTIVE = new Set(["보류", "종료"]);
 function todayBuckets() {
   const statusOf = new Map(DATA.areas.map(a => [`${a.repo}:${a.file}`, a.status]));
-  const open = DATA.todos.filter(t => isOpen(t) && visible(t) && (t.check || !INACTIVE.has(statusOf.get(fileKey(t)))));
-  return {
-    late: open.filter(t => isLate(t) && !t.check).sort(byDue),
-    week: open.filter(t => t.due && t.due >= TODAY && t.due <= weekLimit).sort(byDue),
-    urgent: open.filter(t => t.priority && !t.due && !t.check).sort(byFile),
-    check: open.filter(t => t.check).sort(byDue),
-  };
+  const open = todayTargets(DATA.todos.filter(visible), statusOf);
+  const cols = { late: [], soon: [], nodue: [], tidy: [] };
+  for (const t of open) cols[columnOf(t, TODAY)].push(t);
+  Object.values(cols).forEach(c => c.sort(byPriority));
+  // 프로젝트 카드: 마감 지남·7일 안 마감은 기한 칸, 다시 볼 날이 된 것은 정리 필요. due·review 없으면 안 나온다
+  const cards = { late: [], soon: [], tidy: [] };
+  for (const a of DATA.areas.filter(visible)) {
+    if (a.status === "종료") continue;
+    const s = areaStats(a);
+    if (s.dueIn !== null && a.status !== "보류") {
+      if (s.dueIn < 0) cards.late.push({ a, s });
+      else if (s.dueIn <= SOON_DAYS) cards.soon.push({ a, s });
+    }
+    if (s.reviewDue) cards.tidy.push({ a, s });
+  }
+  cards.late.sort((x, y) => x.s.dueIn - y.s.dueIn);
+  cards.soon.sort((x, y) => x.s.dueIn - y.s.dueIn);
+  // 정리 모드는 #확인 줄 전부를 본다 (기한 칸에 있는 #확인 줄도 떼려면 여기서)
+  return { cols, cards, check: open.filter(t => t.check).sort(byDue) };
 }
+
+function pcard({ a, s }, kind) {
+  const sig = kind === "tidy" ? `다시 볼 날 ${a.review.slice(5)}`
+    : s.dueIn < 0 ? `마감 지남 D+${-s.dueIn}` : s.dueIn === 0 ? "오늘 마감" : `마감 D-${s.dueIn} · ${a.due.slice(5)}`;
+  return `<button class="pcard ${a.repo} k-${kind}" data-area="${esc(a.repo + ":" + a.file)}">
+    <span class="tt">🏁 ${md(a.title)}</span><span class="sig">${sig} · 열린 ${s.open.length}</span></button>`;
+}
+const flat = items => items.length ? list(items, { proj: true }) : "";
+const empty = (msg = "없음") => `<div class="empty">${msg}</div>`;
+
+const COL_BODY = {
+  late: b => b.cards.late.map(c => pcard(c, "late")).join("") + flat(b.cols.late)
+    || empty(),
+  soon: b => {
+    const near = b.cols.soon.filter(soonOf), later = b.cols.soon.filter(t => !soonOf(t));
+    const head = b.cards.soon.map(c => pcard(c, "soon")).join("") + flat(near);
+    return (head || empty(`${SOON_DAYS}일 안 없음`))
+      + (later.length ? `<div class="divider">${SOON_DAYS + 1}일 이후 ${later.length}</div><div class="later">${flat(later)}</div>` : "");
+  },
+  nodue: b => {
+    const pri = b.cols.nodue.filter(t => t.priority), rest = b.cols.nodue.filter(t => !t.priority);
+    const groups = new Map();
+    for (const t of [...rest].sort(byFile)) {
+      if (!groups.has(fileKey(t))) groups.set(fileKey(t), []);
+      groups.get(fileKey(t)).push(t);
+    }
+    const folds = [...groups].map(([k, ts]) => `<details class="pgroup ${ts[0].repo}" data-fold="${esc(k)}"${openFolds.has(k) ? " open" : ""}>
+      <summary><span class="gt">${md(titleOf(ts[0]))}</span><span class="gc">${ts.length}</span></summary>
+      ${list(ts, { hidePath: true })}</details>`).join("");
+    return (pri.length ? `<div class="sub">🔴 우선 ${pri.length}</div>${flat(pri)}` : "")
+      + (folds ? `${pri.length ? `<div class="sub">프로젝트별</div>` : ""}<div class="folds">${folds}</div>` : "")
+      || empty();
+  },
+  tidy: b => `<div class="tidy-entry"><div class="ts">#확인 ${b.check.length}줄을 한 장씩 보며 완료 / #확인 떼기 / 건너뛰기</div>
+      <button class="btn primary" data-act="triage-start" ${b.check.length ? "" : "disabled"}>정리 시작</button></div>`
+    + (b.cards.tidy.map(c => pcard(c, "tidy")).join("") + flat(b.cols.tidy) || empty()),
+};
+
 function renderToday() {
   const b = todayBuckets();
   const el = $("tab-today");
-  if (triage) { renderTriage(el); return b.late.length + b.week.length + b.urgent.length; }
-  el.innerHTML =
-    block("⏰ 지연", b.late, "red") +
-    block("📅 오늘·이번 주", b.week) +
-    block("🔴 기한 없는 우선", b.urgent) +
-    `<div class="triage-entry"><div><div class="tt">🧹 정리 필요 (#확인) ${b.check.length}줄</div>
-       <div class="ts">한 장씩 보며 완료 / #확인 떼기 / 건너뛰기 — 누르면 바로 반영</div></div>
-       <button class="btn primary" data-act="triage-start" ${b.check.length ? "" : "disabled"}>정리 시작</button></div>
-     <details class="fold"><summary>목록으로 보기 <span class="count">${b.check.length}</span></summary>${grouped(b.check)}</details>`;
-  return b.late.length + b.week.length + b.urgent.length;
+  const badge = b.cols.late.length + b.cols.soon.filter(soonOf).length + b.cols.nodue.filter(t => t.priority).length;
+  if (triage) { renderTriage(el); return badge; }
+  if (!todayCol && DATA.todos.length) todayCol = COLUMNS.find(c => b.cols[c.key].length || b.cards[c.key]?.length)?.key;
+  const col = todayCol || "late";
+  // 다시 그려도 칸마다 스크롤 위치를 지킨다
+  const scrolls = new Map([...el.querySelectorAll(".col-body")].map(x => [x.dataset.col, x.scrollTop]));
+  const cardN = k => b.cards[k]?.length ? `<span class="pc" title="프로젝트">🏁 ${b.cards[k].length}</span>` : "";
+  el.innerHTML = `<div class="kanban" data-col="${col}">
+    <div class="col-pick" role="tablist" aria-label="칸">${COLUMNS.map(c => `<button role="tab" data-act="col" data-col="${c.key}"
+      aria-selected="${c.key === col}" class="cp-${c.key}">${c.label}<span class="n">${b.cols[c.key].length}${b.cards[c.key]?.length ? ` · 🏁${b.cards[c.key].length}` : ""}</span></button>`).join("")}</div>
+    ${COLUMNS.map(c => `<section class="col col-${c.key}">
+      <h2>${c.label} <span class="count">${b.cols[c.key].length}</span>${cardN(c.key)}</h2>
+      <div class="col-body" data-col="${c.key}">${COL_BODY[c.key](b)}</div></section>`).join("")}
+  </div>`;
+  el.querySelectorAll(".col-body").forEach(x => { x.scrollTop = scrolls.get(x.dataset.col) || 0; });
+  return badge;
 }
 
 // ── 정리 모드 ──────────────────────────────────────
@@ -374,7 +417,7 @@ function areaStats(a) {
   else if (!open.length) { health = "empty"; signal = `할 일 줄 없음 · 미분류 ${a.unsorted}`; }
   else if (idle !== null && idle > STALE_DAYS) { health = "gray"; signal = `${idle}일째 그대로`; }
   else { health = "green"; signal = "정상"; }
-  return { open, late, check, nextDue, dueIn, afterDue, health, signal };
+  return { open, late, check, nextDue, dueIn, reviewDue, afterDue, health, signal };
 }
 const HEALTH_ORDER = { red: 0, amber: 1, empty: 2, green: 3, gray: 4, closed: 5 };
 function tile(a) {
@@ -499,6 +542,7 @@ function currentTab() {
 function showTab(tab) {
   document.querySelectorAll("nav button").forEach(b => b.setAttribute("aria-selected", b.dataset.tab === tab));
   document.querySelectorAll("section.tab").forEach(s => s.hidden = s.id !== "tab-" + tab);
+  document.body.classList.toggle("on-today", tab === "today"); // PC에서 칸마다 따로 스크롤
   if (tab === "settings") renderSettings(); else render();
   window.scrollTo(0, 0);
 }
@@ -539,6 +583,7 @@ document.addEventListener("click", e => {
     }
     else if (act === "due-clear") changeMeta(sheetArea, "due", null);
     else if (act === "triage-start") startTriage();
+    else if (act === "col") { todayCol = e.target.closest("[data-act]").dataset.col; render(); }
     else if (act === "save-settings") saveSettings();
     else if (act === "cancel-settings") showTab("today");
     else if (act === "forget-token") forgetToken();
@@ -546,7 +591,7 @@ document.addEventListener("click", e => {
     return;
   }
   if (e.target.id === "sheet-wrap") { closeSheet(); return; }
-  const tileEl = e.target.closest(".tile");
+  const tileEl = e.target.closest("[data-area]");
   if (tileEl) { sheetArea = tileEl.dataset.area; renderSheet(); return; }
   const text = e.target.closest(".text");
   if (text) text.classList.toggle("open");
@@ -564,6 +609,11 @@ document.querySelectorAll(".chip").forEach(chip => chip.addEventListener("click"
   triage = null;
   render();
 }));
+// toggle 은 버블링하지 않아 캡처로 받는다
+document.addEventListener("toggle", e => {
+  const k = e.target.dataset?.fold;
+  if (k) e.target.open ? openFolds.add(k) : openFolds.delete(k);
+}, true);
 $("toast-undo").addEventListener("click", undoLast);
 $("reload").addEventListener("click", () => { triage = null; closeSheet(); loadAll(); });
 $("open-settings").addEventListener("click", showSettings);

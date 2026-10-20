@@ -193,3 +193,60 @@ body { padding-bottom: calc(40px + env(safe-area-inset-bottom)); }
   background: var(--card); color: var(--text); }
 .due-pick .btn { padding: 6px 10px; font-size: 13px; }
 .warn-line { background: var(--amber-soft); color: var(--amber); border-radius: 8px; padding: 8px 10px; font-size: 13px; margin: 0 0 10px; }
+
+/* 오늘 — 4열 칸반 (2026-10-20). 좁은 화면은 칸 버튼으로 한 칸씩, PC 는 4열·칸마다 따로 스크롤 */
+.kanban { display: flex; flex-direction: column; gap: 10px; }
+.col-pick { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.col-pick button { font: inherit; font-size: 13px; font-weight: 600; line-height: 1.25; padding: 7px 2px; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--text);
+  display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.col-pick button .n { font-size: 12px; font-weight: 400; color: var(--muted); }
+.col-pick button[aria-selected="true"] { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+.col-pick button[aria-selected="true"] .n { color: var(--bg); }
+.col { display: none; flex-direction: column; min-height: 0; }
+.kanban[data-col="late"] .col-late, .kanban[data-col="soon"] .col-soon,
+.kanban[data-col="nodue"] .col-nodue, .kanban[data-col="tidy"] .col-tidy { display: flex; }
+.col > h2 { display: none; }
+.col-late > h2 { color: var(--red); }
+.col > h2 .pc { color: var(--muted); font-weight: 400; font-size: 12px; margin-left: auto; }
+.col-body { display: flex; flex-direction: column; gap: 6px; }
+.proj { font-size: 11.5px; font-weight: 600; overflow-wrap: anywhere; }
+.proj.company { color: var(--company); } .proj.personal { color: var(--personal); }
+.sub { font-size: 12.5px; font-weight: 600; color: var(--muted); margin: 4px 2px 0; }
+.divider { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; margin: 10px 0 2px; }
+.divider::before, .divider::after { content: ""; flex: 1; border-top: 1px dashed var(--muted); }
+.later { opacity: .55; }
+.pcard { text-align: left; font: inherit; color: var(--text); cursor: pointer; display: flex; flex-direction: column; gap: 2px;
+  border: 1px solid var(--line); border-left: 4px solid var(--company); border-radius: 8px; padding: 7px 10px; background: var(--card); }
+.pcard.personal { border-left-color: var(--personal); }
+.pcard .tt { font-weight: 600; font-size: 13.5px; overflow-wrap: anywhere; }
+.pcard .sig { font-size: 12px; font-weight: 600; }
+.pcard.k-late { background: var(--red-soft); } .pcard.k-late .sig { color: var(--red); }
+.pcard.k-soon, .pcard.k-tidy { background: var(--amber-soft); } .pcard.k-soon .sig, .pcard.k-tidy .sig { color: var(--amber); }
+.folds { display: flex; flex-direction: column; gap: 4px; }
+details.pgroup { background: var(--card); border: 1px solid var(--line); border-left: 4px solid var(--company); border-radius: 8px; }
+details.pgroup.personal { border-left-color: var(--personal); }
+details.pgroup > summary { display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+  padding: 7px 10px; cursor: pointer; list-style: none; }
+details.pgroup > summary::-webkit-details-marker { display: none; }
+details.pgroup > summary .gt { font-weight: 600; font-size: 13.5px; overflow-wrap: anywhere; }
+details.pgroup > summary .gt::before { content: "▸ "; color: var(--muted); }
+details.pgroup[open] > summary .gt::before { content: "▾ "; }
+details.pgroup > summary .gc { color: var(--muted); font-size: 12px; white-space: nowrap; }
+details.pgroup > ul.todos { padding: 0 6px 6px; }
+.tidy-entry { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+  background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+.tidy-entry .ts { color: var(--muted); font-size: 12.5px; flex: 1 1 140px; }
+.triage { max-width: 720px; margin: 0 auto; }
+
+@media (min-width: 900px) {
+  body.on-today { height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; padding-bottom: 0; }
+  body.on-today header { flex: none; }
+  body.on-today main { flex: 1; min-height: 0; width: 100%; max-width: none; display: flex; flex-direction: column; }
+  body.on-today #tab-today { flex: 1; min-height: 0; overflow-y: auto; }
+  .kanban { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-template-rows: minmax(0, 1fr); gap: 12px; height: 100%; }
+  .col-pick { display: none; }
+  .kanban[data-col] .col { display: flex; background: var(--gray-soft); border-radius: 10px; padding: 0 8px 8px; }
+  .col > h2 { display: flex; flex: none; margin: 10px 2px 8px; }
+  .col-body { flex: 1; min-height: 0; overflow-y: auto; }
+}
